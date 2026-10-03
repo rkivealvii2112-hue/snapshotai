@@ -22,6 +22,13 @@ const DEFAULT_ENDPOINT =
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 export async function detectFeatures({ token, base64, labels, threshold = 0.1, width, height }) {
+  // No user key → route through the SpaceSnap relay (/api/detect), which holds
+  // the token server-side. Falls back with code 'relay_unavailable' on static
+  // hosts (GitHub Pages etc.) or when the deployment has no HF_TOKEN secret.
+  if (!token) {
+    return detectViaRelay({ base64, labels, threshold, width, height });
+  }
+
   const endpoint = import.meta.env.VITE_HF_ENDPOINT?.trim() || DEFAULT_ENDPOINT;
 
   // Payload variants, most modern first.
@@ -98,6 +105,60 @@ export async function detectFeatures({ token, base64, labels, threshold = 0.1, w
   }
 
   throw lastErr || new Error('Hugging Face inference failed.');
+}
+
+/**
+ * Relay path: POST /api/detect (see api/detect.js). The relay returns the
+ * same shapes as HF directly, so the warm-up retry loop mirrors the one above.
+ */
+async function detectViaRelay({ base64, labels, threshold, width, height }) {
+  for (let warm = 0; warm <= 4; warm++) {
+    let res;
+    try {
+      res = await fetch('/api/detect', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ image: base64, labels, threshold }),
+      });
+    } catch (netErr) {
+      throw new Error(`Network error reaching the SpaceSnap relay (${netErr.message}).`);
+    }
+
+    const data = await res.json().catch(() => null);
+
+    // ✅ Success — array of detections.
+    if (res.ok && Array.isArray(data)) {
+      return normalizeDetections(data, width, height);
+    }
+
+    // Relay not deployed (static host) or deployment missing HF_TOKEN.
+    if (res.status === 404 || res.status === 501) {
+      const err = new Error(
+        data?.message || 'SpaceSnap relay unavailable — no token and no proxy.'
+      );
+      err.code = 'relay_unavailable';
+      throw err;
+    }
+
+    // Model warming upstream — wait HF's suggested time and retry.
+    const estimated = Number(data?.estimated_time);
+    const isLoading =
+      res.status === 503 ||
+      (typeof data?.error === 'string' && data.error.toLowerCase().includes('loading'));
+    if (isLoading && warm < 4) {
+      await sleep(Math.min(estimated > 0 ? estimated : 12, 25) * 1000 + 250);
+      continue;
+    }
+
+    if (res.status === 429) {
+      throw new Error('SpaceSnap relay is rate-limited — wait ~30s and try again.');
+    }
+
+    throw new Error(
+      `Relay HTTP ${res.status}${data?.error ? `: ${data.error}` : res.statusText ? ` ${res.statusText}` : ''}`
+    );
+  }
+  throw new Error('OWL-ViT is still warming up upstream — try again in a few seconds.');
 }
 
 function normalizeDetections(arr, width, height) {

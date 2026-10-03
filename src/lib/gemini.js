@@ -23,6 +23,11 @@ export async function explainScene({
   mimeType = 'image/jpeg',
   detections = [],
 }) {
+  // No user key → route through the SpaceSnap relay (/api/explain).
+  if (!apiKey) {
+    return explainViaRelay({ base64, mimeType, detections });
+  }
+
   const genAI = new GoogleGenerativeAI(apiKey);
 
   const found = detections.length
@@ -57,4 +62,33 @@ export async function explainScene({
   throw new Error(
     `All Gemini models failed (${chain.join(' → ')}). Last error: ${lastErr?.message || 'unknown'}`
   );
+}
+
+/** Relay path: POST /api/explain (see api/explain.js). */
+async function explainViaRelay({ base64, mimeType, detections }) {
+  let res;
+  try {
+    res = await fetch('/api/explain', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ image: base64, mimeType, detections }),
+    });
+  } catch (netErr) {
+    throw new Error(`Network error reaching the SpaceSnap relay (${netErr.message}).`);
+  }
+
+  const data = await res.json().catch(() => null);
+
+  if (res.ok && data?.text) {
+    return { text: data.text, model: `${data.model} · relay` };
+  }
+  if (res.status === 404 || res.status === 501) {
+    const err = new Error(data?.message || 'SpaceSnap relay unavailable.');
+    err.code = 'relay_unavailable';
+    throw err;
+  }
+  if (res.status === 429) {
+    throw new Error('SpaceSnap relay is rate-limited — wait ~30s and try again.');
+  }
+  throw new Error(`Relay HTTP ${res.status}${data?.error ? `: ${data.error}` : ''}`);
 }

@@ -60,6 +60,37 @@ Keys can also be entered at runtime via the **`KEYS`** button (stored in browser
 
 ---
 
+## 🌍 Deploy it publicly (so anyone can use it — Vercel)
+
+Public deployment uses a **serverless relay** (`api/detect.js`, `api/explain.js`) so your API keys stay **server-side** and every visitor gets **live inference without needing a key**. Never deploy with `VITE_*` keys set — they'd be visible in the public JS bundle.
+
+**Steps (~5 minutes):**
+
+1. Push this repo to GitHub (done if you're reading this there).
+2. Go to [vercel.com/new](https://vercel.com/new) → **Import** your repository. Vercel auto-detects **Vite** (build `npm run build`, output `dist`) — no config changes needed (`vercel.json` is already included).
+3. In **Project → Settings → Environment Variables**, add:
+   - `HF_TOKEN` = your Hugging Face token (Inference Providers permission)
+   - `GEMINI_API_KEY` = your Google AI Studio key
+4. **Deploy** → you get `https://<your-project>.vercel.app`. Share the link — visitors immediately get the full two-stage pipeline via `/api/detect` + `/api/explain`.
+
+**Local full-stack test** (functions + frontend like production):
+
+```bash
+npm i -g vercel
+cp .env.example .env.local   # fill HF_TOKEN / GEMINI_API_KEY (server-side names!)
+npm run dev:full             # → vercel dev (serves /api/* + Vite together)
+```
+
+**Relay details & safety:**
+
+- `/api/detect` and `/api/explain` validate + sanitise input (max ~4.5 MB image, ≤10 labels), enforce a soft **12 req/min per-IP rate limit** (in-memory sliding window — swap for Vercel KV/Upstash for hard limits), and time out at 30 s.
+- If the relay is absent (e.g. static-only host) or env vars are missing, every visitor gracefully falls back to the built-in demo mode — the link never "breaks".
+- Visitants' own keys (via the `KEYS` button) always take precedence over the relay.
+- Free-tier quotas apply to *your* HF/Gemini accounts; the rate limit keeps casual traffic well inside them.
+- Alternative hosts: Netlify (ports the `api/` handlers to `netlify/functions` with ~10 lines of changes), or Render/Railway with a tiny Express server serving `dist/` + the same two routes.
+
+---
+
 ## 🧠 How the pipeline works
 
 **Stage 1 — Detection (`src/lib/huggingface.js`).** The upload is downscaled to ≤1024 px (`src/lib/image.js`), base64-encoded, and POSTed to the HF Inference router with your candidate labels (`clouds, storm system, ocean, forest, wildfire, smoke plume, ice sheet` — editable in the UI). The client retries through OWL-ViT cold starts (HTTP 503 + `estimated_time`) and tries modern/legacy payload shapes for resilience. Response: `[{ label, score, box: {xmin, ymin, xmax, ymax} }]`.

@@ -92,26 +92,26 @@ export default function Dashboard({ onExit }) {
     // ····· STAGE 1 — zero-shot object detection (OWL-ViT) ·····
     setStage('detecting');
     log('▸ STAGE 1/2 · ZERO-SHOT DETECTION @ google/owlvit-base-patch32', 'sys');
+    log(keys.hf ? 'UPLINK MODE: DIRECT (LOCAL TOKEN)' : 'UPLINK MODE: SPACESNAP RELAY', 'sys');
     let dets = [];
     const t0 = performance.now();
-    if (keys.hf) {
-      try {
-        dets = await detectFeatures({
-          token: keys.hf,
-          base64: image.base64,
-          labels,
-          threshold,
-          width: image.width,
-          height: image.height,
-        });
-        log(`UPLINK OK — ${dets.length} RAW HIT(S) IN ${((performance.now() - t0) / 1000).toFixed(1)}s`, 'ok');
-      } catch (e) {
-        log(`HF API ERROR — ${e.message}`, 'err');
+    try {
+      dets = await detectFeatures({
+        token: keys.hf || null, // null → routed via /api/detect serverless relay
+        base64: image.base64,
+        labels,
+        threshold,
+        width: image.width,
+        height: image.height,
+      });
+      log(`UPLINK OK — ${dets.length} RAW HIT(S) IN ${((performance.now() - t0) / 1000).toFixed(1)}s`, 'ok');
+    } catch (e) {
+      if (e.code === 'relay_unavailable') {
+        log('NO TOKEN & NO RELAY CONFIGURED — ONBOARD DEMO DETECTOR ENGAGED', 'warn');
+      } else {
+        log(`DETECTION ERROR — ${e.message}`, 'err');
         log('FALLBACK → ONBOARD DEMO DETECTOR ENGAGED', 'warn');
-        dets = demoDetections(image.width, image.height, labels, image.name);
       }
-    } else {
-      log('NO HF TOKEN FOUND — ONBOARD DEMO DETECTOR ENGAGED', 'warn');
       dets = demoDetections(image.width, image.height, labels, image.name);
     }
 
@@ -133,24 +133,21 @@ export default function Dashboard({ onExit }) {
     // ····· STAGE 2 — vision-language explanation (Gemini) ·····
     setStage('explaining');
     log('▸ STAGE 2/2 · VISION-LANGUAGE EXPLANATION @ gemini-1.5-flash', 'sys');
-    if (keys.gemini) {
-      try {
-        const r = await explainScene({
-          apiKey: keys.gemini,
-          base64: image.base64,
-          mimeType: image.mime,
-          detections: dets,
-        });
-        setExplanation(r.text);
-        log(`GEMINI (${r.model}) ↳ ${r.text}`, 'gemini');
-      } catch (e) {
-        log(`GEMINI API ERROR — ${e.message}`, 'err');
-        const fallback = demoExplanation(dets);
-        setExplanation(fallback);
-        log(`TEMPLATE EXPLAINER ↳ ${fallback}`, 'gemini');
+    try {
+      const r = await explainScene({
+        apiKey: keys.gemini || null, // null → routed via /api/explain serverless relay
+        base64: image.base64,
+        mimeType: image.mime,
+        detections: dets,
+      });
+      setExplanation(r.text);
+      log(`GEMINI (${r.model}) ↳ ${r.text}`, 'gemini');
+    } catch (e) {
+      if (e.code === 'relay_unavailable') {
+        log('NO KEY & NO RELAY CONFIGURED — TEMPLATE EXPLAINER ENGAGED', 'warn');
+      } else {
+        log(`GEMINI ERROR — ${e.message}`, 'err');
       }
-    } else {
-      log('NO GEMINI KEY FOUND — TEMPLATE EXPLAINER ENGAGED', 'warn');
       const fallback = demoExplanation(dets);
       setExplanation(fallback);
       log(`TEMPLATE EXPLAINER ↳ ${fallback}`, 'gemini');
@@ -360,10 +357,14 @@ function StatusBadge({ ok, label }) {
   return (
     <span
       className={`chip ${ok ? 'border-neon-green/60 text-neon-green' : 'border-neon-amber/60 text-neon-amber'}`}
-      title={ok ? 'Live API key configured' : 'No key — demo mode'}
+      title={
+        ok
+          ? 'Live API key configured (your own key, direct uplink)'
+          : 'No local key — uses the SpaceSnap relay when deployed (demo mode otherwise)'
+      }
     >
       <span className={`h-1.5 w-1.5 rounded-full ${ok ? 'bg-neon-green' : 'bg-neon-amber'} animate-blink`} />
-      {label} · {ok ? 'LIVE' : 'DEMO'}
+      {label} · {ok ? 'LIVE' : 'AUTO'}
     </span>
   );
 }

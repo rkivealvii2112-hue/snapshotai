@@ -6,6 +6,7 @@
   "description": "SpaceSnap AI — Two-stage ML pipeline (OWL-ViT zero-shot detection + Gemini vision-language explanation) for Earth-observation imagery, wrapped in a gamified retro HUD.",
   "scripts": {
     "dev": "vite --host 0.0.0.0",
+    "dev:full": "vercel dev",
     "build": "vite build",
     "preview": "vite preview --host 0.0.0.0"
   },
