@@ -13,9 +13,11 @@ import { rateLimit, readJson, sendJson } from './_shared.js';
 const MAX_IMAGE_B64 = 6_000_000;
 const ALLOWED_MIME = new Set(['image/jpeg', 'image/png', 'image/webp']);
 
+/** Mirrors MODEL_CHAIN in src/lib/gemini.js — keep in sync. */
 const MODEL_CHAIN = [
   ...(process.env.GEMINI_MODEL ? [process.env.GEMINI_MODEL.trim()] : []),
-  'gemini-1.5-flash', // requested architecture (retired Sept 2025 → falls through)
+  'gemini-1.5-flash', // requested architecture (retired → falls through)
+  'gemini-3.8-flash', // successor named by Google's own retirement error
   'gemini-2.5-flash',
   'gemini-2.0-flash',
 ];
@@ -88,13 +90,18 @@ export default async function handler(req, res) {
           .join('')
           .trim()
           .replace(/\s+/g, ' ');
-        if (text) return sendJson(res, 200, { text, model });
+        if (text) {
+          console.info(`[spacesnap] Stage 2 model: ${model}`);
+          return sendJson(res, 200, { text, model });
+        }
         lastErr = 'empty_response';
       } else {
         lastErr = j?.error?.message || `http_${r.status}`;
+        console.info(`[spacesnap] Stage 2 model ${model} failed (${lastErr}) — next in chain.`);
       }
     } catch (e) {
       lastErr = e.message; // network issue → try next model anyway
+      console.info(`[spacesnap] Stage 2 model ${model} failed (${lastErr}) — next in chain.`);
     }
   }
 

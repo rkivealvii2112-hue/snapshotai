@@ -1,18 +1,21 @@
 /**
  * STAGE 2 — Vision-Language explanation via the Gemini API (@google/generative-ai).
  *
- * Architecture requested by the brief: gemini-1.5-flash.
- * Note: Google retired the 1.5 Flash endpoints in Sept 2025, so we try the
- * requested model first and automatically fall back to its modern successors
- * (gemini-2.5-flash → gemini-2.0-flash), reporting which model answered.
- * Pin a specific one with VITE_GEMINI_MODEL.
+ * Architecture requested by the brief: gemini-1.5-flash. Google has since
+ * retired both 1.5 Flash and 2.0 Flash — the API answers with a 404 telling you
+ * to use `gemini-3.8-flash`. So we walk a model chain, first success wins, and
+ * we always report which model actually answered:
+ *
+ *   VITE_GEMINI_MODEL (env override) → gemini-1.5-flash → gemini-3.8-flash
+ *   → gemini-2.5-flash → gemini-2.0-flash
  */
 
 import { GoogleGenerativeAI } from '@google/generative-ai';
 
-const MODEL_CHAIN = [
+export const MODEL_CHAIN = [
   ...(import.meta.env.VITE_GEMINI_MODEL ? [import.meta.env.VITE_GEMINI_MODEL.trim()] : []),
   'gemini-1.5-flash', // requested by the brief (retired → falls through)
+  'gemini-3.8-flash', // successor named by Google's own retirement error
   'gemini-2.5-flash',
   'gemini-2.0-flash',
 ];
@@ -53,9 +56,14 @@ export async function explainScene({
         { text: prompt },
       ]);
       const text = result?.response?.text()?.trim().replace(/\s+/g, ' ');
-      if (text) return { text, model };
+      if (text) {
+        console.info(`[SpaceSnap] Stage 2 model: ${model}`);
+        return { text, model };
+      }
+      lastErr = new Error(`${model}: empty response`);
     } catch (e) {
       lastErr = e; // model retired / quota / bad key → try the next one
+      console.info(`[SpaceSnap] Stage 2 model ${model} failed (${e.message}) — next in chain.`);
     }
   }
 
@@ -80,6 +88,7 @@ async function explainViaRelay({ base64, mimeType, detections }) {
   const data = await res.json().catch(() => null);
 
   if (res.ok && data?.text) {
+    if (data.model) console.info(`[SpaceSnap] Stage 2 model: ${data.model} (relay)`);
     return { text: data.text, model: `${data.model} · relay` };
   }
   if (res.status === 404 || res.status === 501) {
