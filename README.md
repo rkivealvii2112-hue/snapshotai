@@ -5,14 +5,16 @@
 Built for an AI/ML coding challenge with a **Two-Stage ML Pipeline**:
 
 ```
-                 ┌──────────────────────────────────────────────────┐
-  JPG / PNG ───► │  STAGE 1 · google/owlvit-base-patch32 (OWL-ViT)  │  → bounding boxes
-  (resized to    │  Zero-Shot Object Detection · HF Inference API   │    { label, score, box }
-   ≤1024 px) ──► └──────────────────────────────────────────────────┘
-                 ┌──────────────────────────────────────────────────┐
-                 │  STAGE 2 · gemini-1.5-flash (Google Gemini API)  │  → 1-sentence plain-
-                 │  Vision-Language Explanation · visual + detections│    English readout
-                 └──────────────────────────────────────────────────┘
+                 ┌──────────────────────────────────────────────────────┐
+  JPG / PNG ───► │  STAGE 1 · google/owlvit-base-patch32 (OWL-ViT)      │  → bounding boxes
+  (resized to    │  Zero-Shot Detection · HF Inference API              │    { label, score, box }
+   ≤1024 px) ──► │  ↳ fallback: zero-shot chat VLM on HF (Qwen3-VL /    │
+                 │    Llama-4-Scout / Qwen2.5-VL) if HF retired OWL-ViT │
+                 └──────────────────────────────────────────────────────┘
+                 ┌──────────────────────────────────────────────────────┐
+                 │  STAGE 2 · Gemini Flash chain (Google Gemini API)    │  → 1-sentence plain-
+                 │  1.5 → 3.8 → 2.5 → 2.0 · vision + detections         │    English readout
+                 └──────────────────────────────────────────────────────┘
 ```
 
 The UI is a gamified, Codedex-flavoured React app: landing screen → **warp-speed starfield transition** (Framer Motion + custom canvas physics) → mission dashboard with drag-and-drop upload, an HTML5 `<canvas>` that paints neon bounding boxes over the feed, and a terminal-style "MISSION LOG" that narrates the pipeline, typewriter-typing Gemini's explanation.
@@ -93,9 +95,11 @@ npm run dev:full             # → vercel dev (serves /api/* + Vite together)
 
 ## 🧠 How the pipeline works
 
-**Stage 1 — Detection (`src/lib/huggingface.js`).** The upload is downscaled to ≤1024 px (`src/lib/image.js`), base64-encoded, and POSTed to the HF Inference router with your candidate labels (`clouds, storm system, ocean, forest, wildfire, smoke plume, ice sheet` — editable in the UI). The client retries through OWL-ViT cold starts (HTTP 503 + `estimated_time`) and tries modern/legacy payload shapes for resilience. Response: `[{ label, score, box: {xmin, ymin, xmax, ymax} }]`.
+**Stage 1 — Detection (`src/lib/huggingface.js`).** The upload is downscaled to ≤1024 px (`src/lib/image.js`), base64-encoded, and POSTed to the HF Inference router with your candidate labels (`clouds, storm system, ocean, forest, wildfire, smoke plume, ice sheet` — editable in the UI). OWL-ViT is tried first, and the client retries through cold starts (HTTP 503 + `estimated_time`) and modern/legacy payload shapes for resilience. Response: `[{ label, score, box: {xmin, ymin, xmax, ymax} }]`.
 
-**Stage 2 — Explanation (`src/lib/gemini.js`).** The same image plus the detection summary is sent to Gemini with a prompt demanding *one plain-English sentence* about the meteorological/geographical event. The requested `gemini-1.5-flash` is tried first (note: Google retired 1.5 Flash in Sept 2025, so the client automatically falls back to `gemini-2.5-flash → gemini-2.0-flash` and reports which model answered — pin one with `VITE_GEMINI_MODEL`).
+> ⚠️ **OWL-ViT fallback.** HF removed zero-shot-object-detection from the serverless `hf-inference` provider, so that route now answers `HTTP 400: Model not supported by provider hf-inference` (or 404). On those statuses the client transparently switches to **zero-shot detection via the OpenAI-compatible chat router** (`POST https://router.huggingface.co/v1/chat/completions`, same Bearer token), trying `Qwen/Qwen3-VL-8B-Instruct → meta-llama/Llama-4-Scout-17B-16E-Instruct → Qwen/Qwen2.5-VL-7B-Instruct`. The image goes in as a data-URL `image_url`, the prompt demands *only* a JSON array `[{label, score, box:{xmin,ymin,xmax,ymax}}]` with integer coordinates on a **0–1000 grid**, and those are scaled to the image's width/height. The detector that answered is logged and surfaced (`data.detector` on the client, `X-SpaceSnap-Detector` on the relay).
+
+**Stage 2 — Explanation (`src/lib/gemini.js`).** The same image plus the detection summary is sent to Gemini with a prompt demanding *one plain-English sentence* about the meteorological/geographical event. Google has retired both 1.5 Flash and 2.0 Flash (its error points at `gemini-3.8-flash`), so the client walks a chain — `VITE_GEMINI_MODEL` → `gemini-1.5-flash` → `gemini-3.8-flash` → `gemini-2.5-flash` → `gemini-2.0-flash` — and reports which model answered.
 
 **Canvas mapping (`src/components/DetectionCanvas.jsx`).** The canvas is sized so it displays the *exact pixels* sent to the API, scaled to fit its container — so box coordinates need a single scale factor:
 
@@ -134,14 +138,15 @@ Boxes pop in one-by-one with glowing corner brackets, center reticles and confid
 
 ## 📝 Challenge submission write-up (~130 words)
 
-> **SpaceSnap AI** is a gamified Earth-observation analyzer built on a two-stage ML pipeline. Stage 1 runs zero-shot object detection with **OWL-ViT** (`google/owlvit-base-patch32`) via the Hugging Face Inference API: an uploaded satellite image is downscaled, sent with editable candidate labels — clouds, storms, oceans, forests, wildfires, ice — and returns precise bounding boxes with confidence scores. Stage 2 passes those detections plus the image to **Gemini** (`gemini-1.5-flash`), which generates a one-sentence, plain-English explanation of the meteorological or geographical event. The **React + Vite** frontend uses **Framer Motion** for a warp-speed starfield transition from landing page to dashboard, **Tailwind** for the retro neon HUD aesthetic, and an HTML5 `<canvas>` to map API coordinates onto the live image feed as glowing labeled boxes.
+> **SpaceSnap AI** is a gamified Earth-observation analyzer built on a two-stage ML pipeline. Stage 1 runs zero-shot object detection with **OWL-ViT** (`google/owlvit-base-patch32`) via the Hugging Face Inference API: an uploaded satellite image is downscaled, sent with editable candidate labels — clouds, storms, oceans, forests, wildfires, ice — and returns precise bounding boxes with confidence scores (with an automatic zero-shot **chat-VLM fallback** on the same token if HF has retired OWL-ViT serverlessly). Stage 2 passes those detections plus the image to **Gemini** (chain: `gemini-1.5-flash → 3.8-flash → 2.5-flash → 2.0-flash`), which generates a one-sentence, plain-English explanation of the meteorological or geographical event. The **React + Vite** frontend uses **Framer Motion** for a warp-speed starfield transition from landing page to dashboard, **Tailwind** for the retro neon HUD aesthetic, and an HTML5 `<canvas>` to map API coordinates onto the live image feed as glowing labeled boxes.
 
 ## 🛠️ Troubleshooting
 
 - **`HTTP 503 / "Model loading"`** — normal on HF free tier; the client waits `estimated_time` and retries automatically.
+- **`HTTP 400 "Model not supported by provider hf-inference"` (or 404)** — OWL-ViT is no longer served serverlessly; the client automatically falls back to zero-shot chat detection (Qwen3-VL → Llama-4-Scout → Qwen2.5-VL). No action needed.
 - **`401/403` from HF** — regenerate the token with the **Inference Providers** permission.
-- **Endpoint moved?** — override without code changes: `VITE_HF_ENDPOINT=…` in `.env`.
-- **Gemini `404`** — 1.5 Flash is retired; the chain falls back automatically, or set `VITE_GEMINI_MODEL=gemini-2.5-flash`.
+- **Endpoints moved?** — override without code changes: `VITE_HF_ENDPOINT` / `VITE_HF_CHAT_ENDPOINT` (client) or `HF_ENDPOINT` / `HF_CHAT_ENDPOINT` (relay).
+- **Gemini `404`** — 1.5 Flash is retired and 2.0 Flash is on the way out; the chain falls through to `gemini-3.8-flash` automatically, or pin one with `VITE_GEMINI_MODEL=gemini-3.8-flash`.
 - **Box positions drifting on huge images** — can't happen here: the API and the canvas always see the identical processed pixels.
 
 ---

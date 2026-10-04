@@ -89,9 +89,10 @@ export default function Dashboard({ onExit }) {
     setDetections([]);
     setExplanation('');
 
-    // ····· STAGE 1 — zero-shot object detection (OWL-ViT) ·····
+    // ····· STAGE 1 — zero-shot object detection (OWL-ViT → VLM chat) ·····
     setStage('detecting');
     log('▸ STAGE 1/2 · ZERO-SHOT DETECTION @ google/owlvit-base-patch32', 'sys');
+    log('   FALLBACK → ZERO-SHOT CHAT VLM (QWEN3-VL · LLAMA-4-SCOUT · QWEN2.5-VL)', 'sys');
     log(keys.hf ? 'UPLINK MODE: DIRECT (LOCAL TOKEN)' : 'UPLINK MODE: SPACESNAP RELAY', 'sys');
     let dets = [];
     const t0 = performance.now();
@@ -99,12 +100,14 @@ export default function Dashboard({ onExit }) {
       dets = await detectFeatures({
         token: keys.hf || null, // null → routed via /api/detect serverless relay
         base64: image.base64,
+        mimeType: image.mime,
         labels,
         threshold,
         width: image.width,
         height: image.height,
       });
       log(`UPLINK OK — ${dets.length} RAW HIT(S) IN ${((performance.now() - t0) / 1000).toFixed(1)}s`, 'ok');
+      if (dets.detector) log(`DETECTOR ANSWERED — ${dets.detector}`, 'data');
     } catch (e) {
       if (e.code === 'relay_unavailable') {
         log('NO TOKEN & NO RELAY CONFIGURED — ONBOARD DEMO DETECTOR ENGAGED', 'warn');
@@ -132,7 +135,7 @@ export default function Dashboard({ onExit }) {
 
     // ····· STAGE 2 — vision-language explanation (Gemini) ·····
     setStage('explaining');
-    log('▸ STAGE 2/2 · VISION-LANGUAGE EXPLANATION @ gemini-1.5-flash', 'sys');
+    log('▸ STAGE 2/2 · VLM EXPLANATION @ gemini-1.5-flash → 3.8-flash → 2.5-flash → 2.0-flash', 'sys');
     try {
       const r = await explainScene({
         apiKey: keys.gemini || null, // null → routed via /api/explain serverless relay
@@ -340,8 +343,8 @@ export default function Dashboard({ onExit }) {
       </div>
 
       <footer className="mt-5 text-center text-[9px] uppercase tracking-widest text-cyan-300/40">
-        STAGE 1 · google/owlvit-base-patch32 @ HF INFERENCE ▸ STAGE 2 · gemini-1.5-flash @ GOOGLE
-        AI ▸ RENDER · HTML5 CANVAS HUD
+        STAGE 1 · google/owlvit-base-patch32 + ZERO-SHOT CHAT VLM FALLBACK ▸ STAGE 2 ·
+        GEMINI FLASH CHAIN @ GOOGLE AI ▸ RENDER · HTML5 CANVAS HUD
       </footer>
 
       <AnimatePresence>
